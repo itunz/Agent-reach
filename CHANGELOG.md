@@ -6,6 +6,81 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+
+## 1.6.5 — 2026-10-19（本地候选版）
+
+- 安装表格改用短语，如“读正文、看评论”“看热帖、看热股”；共用的范围说明只写一次。
+- 中英文 README 顶部新增 Discord 链接和加入徽章，校正 Reddit 公开内容的免登录说明。
+- Shorten feature labels while retaining public-first access, comment scope and subtitle requirements.
+
+
+## 1.6.4 — 2026-10-19（本地候选版）
+
+中文：
+- 安装后按本地时间问候，用三列表说明不用登录能查什么、哪些功能需要登录后再试。
+- 将“索引”“页面提示登录时”等说明改为具体内容；Reddit 的公开帖子和评论继续免登录先读。
+
+English:
+- Add a local-time greeting and a plain-language, three-column installation receipt.
+- Name concrete public content and authenticated features while preserving public-first access.
+
+Technical changes:
+- Generate the greeting locally with the standard library; no network lookup, new dependency or extra configuration.
+- Keep JSON output, private report saving, install failures and verification evidence intact; synchronize both Skill languages.
+
+
+## 1.6.3 — 2026-10-19（本地候选版）
+
+中文：
+- 安装输出精简为一张短表，保留默认安装结果、免登录可获取内容及按需登录提示。
+
+English:
+- Installation now shows one compact table with default installs, public content and optional sign-in.
+
+Technical changes:
+- Replace the two detailed matrices with a short, generated receipt; retain full structured capabilities and reference documentation.
+- Preserve installation failures, user removals and live-verification scope in the compact view.
+
+
+
+## 1.6.2 — 2026-10-19（本地候选版）
+
+中文：
+- 安装完成后直接展示能力表，说明默认装了什么、免登录能读到什么、哪些功能按需登录。
+- 能公开读取的内容继续优先读取；已经拿到的结果会保留。
+
+English:
+- Installation now shows what was installed, what public content can be read, and which features may need sign-in.
+- Publicly readable content stays on public paths, and retrieved results are preserved.
+
+Technical changes:
+- 安装交付改为程序生成的勾叉能力表：默认渠道安装结果、免登录搜索/正文/评论/字幕粒度、按需渠道认证增量与边界。
+- `setup --text` 直接输出表格；默认 JSON 同时返回 Markdown 和保存的本地报告路径。
+- Skill 要求安装最终回复完整展示两张表；能力勾叉与本机联网验收分别列示，安装失败和用户移除保持可见。
+- 保留 1.6.1 的原 13 渠道、Cloak 与公开能力优先优化。
+
+
+
+## 1.6.1 — 2026-10-19（本地候选版）
+
+中文：
+- 登录成功后自动保存并关闭窗口；登录取消或超时会保留旧会话。
+- 查询按需准备渠道，加载失败、验证和登录要求分别提示。
+
+English:
+- Completed sign-ins save automatically; cancellation and timeout preserve the previous session.
+- Channels are prepared when needed, with separate guidance for loading errors, verification and sign-in.
+
+Technical changes:
+- 原 13 渠道范围；arXiv、Hacker News、闲鱼新增部分暂缓。
+- 所有平台先判断已有公开能力；Reach 只补缺口，按实际操作决定登录，保留已读结果。
+- 安装、添加渠道及状态查询附带能力摘要，区分公开路径、正式动作、本机验收与局限。
+- Cloak 登录检测成功后自动保存，退出/超时保留旧会话；查询默认 headless，独立运行，导入已有登录态为可选授权路径。
+- 小红书 comments 动作贯通 CLI/MCP；说明顶级评论与已加载回复的范围。
+- 按渠道节流、记录后端故障并暂停；参数先验证，风险和限流不自动切换后端继续访问。
+- 下载错误区分阶段并脱敏；重试复用已安装包与缓存。版本号与包元数据保持一致。
+
+
 ## [1.6.0] - unreleased
 
 中文：

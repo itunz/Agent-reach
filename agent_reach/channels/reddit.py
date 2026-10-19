@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Reddit — OpenCLI in the Agent Reach browser. Login is mandatory.
+"""Reddit browser actions supplement public web search and reading.
 
-Live-verified 2026-06: there is NO zero-config path. Anonymous .json
-endpoints are blocked (403 anti-bot, all variants), and the official API
-closed self-service registration in 2025-11.
+Public posts and some comments can be available through an agent's existing
+web tools without Reddit login. A blocked anonymous JSON endpoint does not
+establish a site-wide login requirement. These actions use managed browser
+sessions; request authentication only when the selected path requires it.
 """
 
 from agent_reach.backends.opencli import opencli_call, opencli_items
@@ -34,24 +35,24 @@ class RedditChannel(Channel):
     prereqs = ("node", "chrome")
 
     def setup_problems(self):
-        from agent_reach.runtime.browser import setup_problems
+        from agent_reach.runtime.browser_binding import setup_problems
 
-        return setup_problems()
+        return setup_problems(self.name)
 
     actions = (
         Action(
             "search",
-            "Search posts",
+            "Browser search; prefer existing web search for public Reddit posts",
             (
                 Param("query", "what to search for"),
                 Param("limit", "max results", required=False, type=int, default=5),
             ),
-            (("opencli", "_opencli_search"),),
+            (("cloakbrowser", "_cloak_search"), ("opencli", "_opencli_search")),
             live_test={"query": "python", "limit": 2},
         ),
         Action(
             "read",
-            "Read a post and its top comments",
+            "Browser read of a post and top comments; prefer web fetch for public posts",
             (Param("target", "post link or id"),),
             (("opencli", "_opencli_read"),),
         ),
@@ -77,6 +78,11 @@ class RedditChannel(Channel):
     def _opencli_search(self, *, query: str, limit: int, timeout: float) -> list:
         return _reddit(["search", query, "--limit", str(limit)], timeout)[:limit]
 
+    def _cloak_search(self, *, query: str, limit: int, timeout: float) -> list:
+        from agent_reach.backends.cloak import call
+
+        return call(self.name, "search", query=query, limit=limit, timeout=timeout)
+
     def _opencli_read(self, *, target: str, timeout: float) -> list:
         t = str(target).strip()
         if not (self.can_handle(t) or t.isalnum()):
@@ -91,3 +97,8 @@ class RedditChannel(Channel):
 
     def _opencli_subreddit(self, *, name: str, limit: int, timeout: float) -> list:
         return _reddit(["subreddit", name.removeprefix("r/"), "--limit", str(limit)], timeout)[:limit]
+
+    def on_remove(self) -> None:
+        from agent_reach.backends.cloak import logout
+
+        logout(self.name)

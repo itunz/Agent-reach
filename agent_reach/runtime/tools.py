@@ -1,8 +1,8 @@
 """Upstream tools and machine prerequisites Agent Reach installs, at their latest allowed version.
 
-Versions are not pinned. Each tool may set `floor` (oldest version we accept)
+New installations prefer the tested versions declared below. Each tool may set `floor` (oldest version we accept)
 and `exclude` (known-bad versions, added in a release when an upstream breaks);
-the install asks the package manager for the newest version inside those limits.
+Unpinned tools use the newest version inside those limits. Existing user tools are not silently downgraded.
 state.json records the version actually installed.
 
 Kinds:
@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from . import state
-from .result import NEED_SETUP, UPSTREAM_BROKEN, ReachError
+from .result import NEED_SETUP, TIMEOUT, UPSTREAM_BROKEN, ReachError, _clean
 
 OURS = "agent-reach"
 
@@ -46,20 +46,22 @@ class Tool:
     singleton: bool = False
     floor: str = ""                 # oldest acceptable version
     exclude: Tuple[str, ...] = ()   # known-bad versions
+    tested: str = ""                # reproducible default for newly installed tools
     needs: Tuple[str, ...] = ()     # tools that must be installed first
 
 
 TOOLS: Dict[str, Tool] = {
     t.name: t
     for t in (
-        Tool("bili-cli", "pip", "bilibili-cli", ("bili",)),
+        Tool("cloakbrowser", "pip", "cloakbrowser", ("cloakbrowser",), tested="0.6.3"),
+        Tool("bili-cli", "pip", "bilibili-cli", ("bili",), tested="0.6.2"),
         Tool(
             "boss-agent-cli", "pip",
-            "boss-agent-cli @ https://github.com/can4hou6joeng4/boss-agent-cli/archive/HEAD.zip",
+            "boss-agent-cli @ git+https://github.com/can4hou6joeng4/boss-agent-cli.git@4c991b77086a203173bf08a4cb64a23af6514fe6",
             ("boss",),
         ),
-        Tool("mcporter", "npm", "mcporter", ("mcporter",), needs=("node",)),
-        Tool("opencli", "npm", "@jackwener/opencli", ("opencli",), singleton=True, floor="1.8.6", needs=("node",)),
+        Tool("mcporter", "npm", "mcporter", ("mcporter",), tested="0.14.3", needs=("node",)),
+        Tool("opencli", "npm", "@jackwener/opencli", ("opencli",), singleton=True, floor="1.8.8", tested="1.8.8", needs=("node",)),
         Tool("ffmpeg", "ffmpeg", "imageio-ffmpeg", ("ffmpeg",)),
         Tool("node", "node", "", ("node", "npm", "npx")),
         Tool("uv", "uv", "", ("uv", "uvx")),
@@ -173,7 +175,9 @@ def allowed(tool: Tool, version: Optional[str]) -> bool:
 
 
 def install_spec(tool: Tool) -> str:
-    """What the package manager is asked for: the newest version inside floor/exclude."""
+    """Tested version when known; otherwise the floor/exclude range."""
+    if tool.tested:
+        return tool.package + ("==" if tool.kind in ("pip", "ffmpeg") else "@") + tool.tested
     if tool.kind in ("pip", "ffmpeg"):
         cons = ([f">={tool.floor}"] if tool.floor else []) + [f"!={x}" for x in tool.exclude]
         if " @ " in tool.package or not cons:
@@ -191,7 +195,7 @@ def install_spec(tool: Tool) -> str:
 
 
 def _dist_name(tool: Tool) -> str:
-    return re.split(r"[\s@<>=!~\[;]", tool.package, 1)[0]
+    return re.split(r"[\s@<>=!~\[;]", tool.package, maxsplit=1)[0]
 
 
 def _pip_version(tool: Tool) -> Optional[str]:
@@ -242,30 +246,50 @@ def _private_version(tool: Tool) -> Optional[str]:
 
 # ── installing ──
 
-def _install_env() -> dict:
-    """pip and npm only read proxy env vars; hand them the OS proxy (e.g. the macOS system proxy) when none is set."""
+def install_env() -> dict:
+    """One proxy environment for package and browser-binary downloads.
+
+    Explicit shell proxies win. A protocol with no explicit value inherits the
+    other protocol, or ALL_PROXY; only then do we consult the OS proxy. This
+    returns a copy and never changes the user's proxy settings.
+    """
     extend_path()
     env = dict(os.environ)
-    if not (env.get("HTTPS_PROXY") or env.get("https_proxy")):
+    https = env.get("HTTPS_PROXY") or env.get("https_proxy")
+    http = env.get("HTTP_PROXY") or env.get("http_proxy")
+    all_proxy = env.get("ALL_PROXY") or env.get("all_proxy")
+    if not (https or http or all_proxy):
         found = urllib.request.getproxies()
-        proxy = found.get("https") or found.get("http")
-        if proxy:
-            env["HTTPS_PROXY"] = env["HTTP_PROXY"] = proxy
+        https, http = found.get("https"), found.get("http")
+        if found.get("no") and not (env.get("NO_PROXY") or env.get("no_proxy")):
+            env["NO_PROXY"] = found["no"]
+    proxy = https or http or all_proxy
+    if proxy:
+        env.setdefault("HTTPS_PROXY", https or proxy)
+        env.setdefault("HTTP_PROXY", http or proxy)
     return env
 
 
-def _run(argv, timeout: float = 600, env: Optional[dict] = None) -> str:
+def _install_env() -> dict:
+    """Compatibility for installers that used the private helper."""
+    return install_env()
+
+
+def _run(argv, timeout: float = 600, env: Optional[dict] = None, *, stage: str = "tool_install") -> str:
     run_env = _install_env()
     run_env.update(env or {})
+    proxy_mode = "configured proxy" if any(run_env.get(k) for k in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy")) else "direct network"
+    hint = f"Stage: {stage}; network: {proxy_mode}. Check this download path, then rerun setup; installed packages and download caches are reused."
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=run_env)
+        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, env=run_env)
     except FileNotFoundError:
         raise ReachError(NEED_SETUP, f"{Path(argv[0]).name} is not installed") from None
     except subprocess.TimeoutExpired:
-        raise ReachError(UPSTREAM_BROKEN, f"installing timed out: {' '.join(map(str, argv[:3]))}") from None
+        raise ReachError(TIMEOUT, f"{stage} timed out after {timeout:.0f}s", hint=hint) from None
     if proc.returncode != 0:
-        last = next((ln for ln in reversed(proc.stderr.splitlines()) if ln.strip()), "")
-        raise ReachError(UPSTREAM_BROKEN, f"install failed: {last[:300]}")
+        output = proc.stderr or proc.stdout
+        last = next((ln for ln in reversed(output.splitlines()) if ln.strip()), "")
+        raise ReachError(UPSTREAM_BROKEN, f"{stage} failed: {_clean(last) or 'no error output'}", hint=hint)
     return proc.stdout
 
 
@@ -275,19 +299,22 @@ def _download(url: str, dest: Path, timeout: float = 600) -> None:
     opener = urllib.request.build_opener(*handlers)
     req = urllib.request.Request(url, headers={"User-Agent": "agent-reach"})
     try:
-        with opener.open(req, timeout=60) as resp, open(dest, "wb") as fh:
+        with opener.open(req, timeout=timeout) as resp, open(dest, "wb") as fh:
             shutil.copyfileobj(resp, fh, 1024 * 1024)
     except OSError as exc:
-        raise ReachError(UPSTREAM_BROKEN, f"download failed: {url}: {exc}") from None
+        raise ReachError(UPSTREAM_BROKEN, _clean(f"download failed: {url}: {exc}")) from None
 
 
 def _install_pip(tool: Tool) -> None:
     venv = tool_dir(tool.name) / "venv"
-    shutil.rmtree(venv, ignore_errors=True)
     venv.parent.mkdir(parents=True, exist_ok=True)
-    _run([sys.executable, "-m", "venv", str(venv)])
     py = venv / ("Scripts/python.exe" if _WIN else "bin/python")
-    _run([str(py), "-m", "pip", "install", "--quiet", "--disable-pip-version-check", install_spec(tool)])
+    # ponytail: keep a partial install so rerunning setup reuses its packages
+    # and pip cache; venv repairs a missing interpreter in place.
+    if not py.is_file():
+        _run([sys.executable, "-m", "venv", str(venv)], stage=f"{tool.name}:venv")
+    _run([str(py), "-m", "pip", "install", "--quiet", "--disable-pip-version-check", install_spec(tool)],
+         stage=f"{tool.name}:pip_packages")
     if tool.kind == "ffmpeg":
         exe = _run([str(py), "-c", "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())"]).strip()
         link = _private_bin(tool, "ffmpeg")
@@ -474,7 +501,16 @@ def ensure(name: str, *, allow_upgrade: bool = False, upgrade: bool = False) -> 
     private_ok = all(_private_bin(tool, c).exists() for c in tool.commands)
     if tool.kind in ("node", "uv", "ffmpeg") and not private_ok and all(shutil.which(c) for c in tool.commands):
         return {"tool": name, "owner": "system", "scope": "system", "version": None}
-    if not private_ok or not ours or upgrade:
+    pinned_mismatch = False
+    if private_ok and tool.name == "boss-agent-cli":
+        venv = tool_dir(tool.name) / "venv"
+        sources = list(venv.glob("**/boss_agent_cli-*.dist-info/direct_url.json"))
+        expected = tool.package.rsplit("@", 1)[-1]
+        try:
+            pinned_mismatch = not sources or json.loads(sources[0].read_text()).get("vcs_info", {}).get("commit_id") != expected
+        except (OSError, ValueError):
+            pinned_mismatch = True
+    if not private_ok or not ours or upgrade or pinned_mismatch:
         _install(tool)
     elif entry.get("version"):
         return {"tool": name, **entry}
